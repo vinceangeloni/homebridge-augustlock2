@@ -581,7 +581,7 @@ AugustPlatform.prototype.sendcode = function (callback) {
   }, function (error, request, body) {
     if (!error && request.statusCode == 200) {
       self.platformLog("send code " + self.code);
-      self.getlocks(callback);
+      self.sendcodeemail(callback);
     }
 
   }).on('error', function (error) {
@@ -649,12 +649,17 @@ AugustPlatform.prototype.configurationRequestHandler = function (context, reques
           "title": "Configuration",
           "items": [{
             "id": "phone",
-            "title": "Phone(Required)",
+            "title": "Phone (Required)",
             "placeholder": this.phone ? "Leave blank if unchanged" : "phone - Example (1xxxxxxxxxx)"
           }, {
             "id": "password",
             "title": "Password (Required)",
             "placeholder": this.password ? "Leave blank if unchanged" : "password",
+            "secure": true
+          }, {
+            "id": "email",
+            "title": "Email Address (Required)",
+            "placeholder": this.email ? "Leave blank if unchanged" : "email",
             "secure": true
           }]
         }
@@ -667,81 +672,12 @@ AugustPlatform.prototype.configurationRequestHandler = function (context, reques
         var userInputs = request.response.inputs;
 
         // Setup info for adding or updating accessory
+        this.email = this.email || userInputs.email ;
         this.phone = this.phone || userInputs.phone ;
         this.password = this.password || userInputs.password;
-        this.apitoken = this.securityToken;
 
         // Check for required info
-        if (this.phone && this.password) {
-          var respDict = {
-            "type": "Interface",
-            "interface": "input",
-            "title": "code",
-            "items": [{
-              "id": "code",
-              "title": "August Verification Code",
-              "placeholder": this.code ? "Text Phone Verification Code" : "code",
-              "showNextButton": true
-            }]
-          };
-          context.step = 3;
-
-        } else {
-          // Error if required info is missing
-          var respDict = {
-            "type": "Interface",
-            "interface": "instruction",
-            "title": "Error",
-            "detail": "Some required information is missing.",
-            "showNextButton": true
-          };
-          context.step = 1;
-
-        }
-        callback(respDict);
-        break;
-
-      case 3:
-        var userInputs = request.response.inputs;
-
-        // Setup info for adding or updating accessory
-        this.code = userInputs.code || this.code;
-        this.sendcode(callback);
-
-        var respDict = {
-          "type": "Interface",
-          "interface": "instruction",
-          "title": "Success",
-          "detail": "The configuration is being updated.",
-          "showNextButton": true
-        };
-        context.step = 4;
-        callback(respDict);
-        break;
-
-      case 4:
-        var respDict = {
-          "type": "Interface",
-          "interface": "input",
-          "title": "Configuration",
-          "items": [{
-            "id": "email",
-            "title": "Email(Required)",
-            "placeholder": this.phone ? "Leave blank if unchanged" : "email"
-          }]
-        }
-        context.step = 5;
-        callback(respDict);
-        break;
-
-      case 5:
-        var userInputs = request.response.inputs;
-
-        // Setup info for adding or updating accessory
-        this.email = this.email || userInputs.email ;
-
-        // Check for required info
-        if (this.email) {
+        if (this.email && this.phone && this.password) {
           // Add or update accessory in HomeKit
           this.addAccessory();
 
@@ -766,7 +702,7 @@ AugustPlatform.prototype.configurationRequestHandler = function (context, reques
               "showNextButton": true
             }]
           };
-          context.step = 6;
+          context.step = 3;
 
         } else {
           // Error if required info is missing
@@ -783,12 +719,11 @@ AugustPlatform.prototype.configurationRequestHandler = function (context, reques
         callback(respDict);
         break;
 
-      case 6:
+      case 3:
         var userInputs = request.response.inputs;
 
         // Setup info for adding or updating accessory
-        this.code = userInputs.code || this.code;
-        this.sendcodeemail(callback);
+        this.sendcode(callback);
 
         var respDict = {
           "type": "Interface",
@@ -797,11 +732,11 @@ AugustPlatform.prototype.configurationRequestHandler = function (context, reques
           "detail": "The configuration is now updated.",
           "showNextButton": true
         };
-        context.step = 7;
+        context.step = 4;
         callback(respDict);
         break;
 
-      case 7:
+      case 4:
         // Update config.json accordingly
         delete context.step;
         var newConfig = this.config;
