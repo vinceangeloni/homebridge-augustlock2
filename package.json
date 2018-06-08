@@ -1,7 +1,7 @@
 {
   "name": "homebridge-augustlock2",
   "version": "0.2.1",
-  "description": "August Lock V 2 plugin for HomeBridge (API 2.0): https://github.com/nfarina/homebridge",
+  "description": "August Lock plugin for HomeBridge: https://github.com/nfarina/homebridge",
   "repository": {
     "type": "git",
     "url": "git://github.com/msutara/homebridge-augustlock2.git"
