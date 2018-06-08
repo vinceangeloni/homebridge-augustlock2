@@ -14,7 +14,7 @@
   "bugs": {
     "url": "https://github.com/msutara/homebridge-augustlock2/issues"
   },
-  "homepage": "https://github.com/luisiam/homebridge-augustlock2#readme",
+  "homepage": "https://github.com/msutara/homebridge-augustlock2#readme",
   "engines": {
     "node": ">=0.4.0",
     "homebridge": ">=0.4.9"
