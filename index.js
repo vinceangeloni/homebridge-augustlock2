@@ -1,6 +1,6 @@
-var request = require("request");
+const AugustApi = require('./api.js');
 var chalk = require("chalk");
-var jar = request.jar();
+
 var Accessory, Service, Characteristic, UUIDGen;
 
 module.exports = function (homebridge) {
@@ -10,6 +10,7 @@ module.exports = function (homebridge) {
   UUIDGen = homebridge.hap.uuid;
 
   homebridge.registerPlatform("homebridge-AugustLock2", "AugustLock2", AugustPlatform, true);
+
 }
 
 function AugustPlatform(log, config, api) {
@@ -27,8 +28,9 @@ function AugustPlatform(log, config, api) {
   this.maxCount = this.shortPollDuration / this.shortPoll;
   this.count = this.maxCount;
   this.validData = false;
-  this.ContentType = "application/json";
-  this.xkeaseapikey = "14445b6a2dba";
+
+  this.augustApi = new AugustApi(this.securityToken);
+
   this.manufacturer = "AUGUST";
   this.accessories = {};
 
@@ -269,38 +271,20 @@ AugustPlatform.prototype.identify = function (accessory, paired, callback) {
 AugustPlatform.prototype.login = function (callback) {
   var self = this;
 
-  var body = {
-    'identifier': 'phone:+' + this.phone,
-    'installId': '0',
-    'password': this.password
-  };
-  request.post({
-    url: "https://api-production.august.com/session",
-    headers: { 
-      'content-type': this.ContentType, 
-      'x-kease-api-key': this.xkeaseapikey, 
-      'Proxy-Connection': 'keep-alive', 
-      'accept-Language': 'en-US;q=1' 
-    },
+  // Log in
+  var authenticate = this.augustApi.authenticate('email:' + this.email, this.password);
+  authenticate.then(function (result) {
+    self.userId = result.body.userId;
+    self.platformLog("Logged in with ID " + self.userId);
+    self.securityToken = result.response.headers['x-august-access-token'];
+    self.postLogin(callback);
 
-    body: JSON.stringify(body)
-
-  }, function (error, request, body) {
-    if (!error && request.statusCode == 200) {
-      var json = JSON.parse(body);
-      self.userId = json["userId"];
-
-      self.securityToken = request.headers['x-august-access-token'];
-      self.platformLog("Logged in with ID" + self.userId);
-      self.postLogin(callback);
-
-    }
-
-  }).on('error', function (error) {
+  }, function (error) {
     self.platformLog(error);
     callback(error, null);
 
   });
+
 }
 
 AugustPlatform.prototype.postLogin = function (accessory, paired, getlocks, callback) {
@@ -308,31 +292,6 @@ AugustPlatform.prototype.postLogin = function (accessory, paired, getlocks, call
   if (self.securityToken) {
     self.getlocks(accessory);
 
-  } else {
-    var body = {
-      'value': '+' + this.phone
-    };
-    require('request').post({
-      url: "https://api-production.august.com/validation/phone",
-      headers: {
-        'content-type': this.ContentType,
-        'x-kease-api-key': this.xkeaseapikey,
-        'x-august-access-token': this.securityToken
-      },
-
-      body: JSON.stringify(body)
-
-    }, function (error, request, body) {
-      if (!error && request.statusCode == 200) {
-        self.platformLog("Sent Verification Code " + self.phone);
-
-      }
-
-    }).on('error', function (error) {
-      self.platformLog(error);
-      callback(error, null);
-
-    });
   }
 
 }
@@ -340,29 +299,33 @@ AugustPlatform.prototype.postLogin = function (accessory, paired, getlocks, call
 AugustPlatform.prototype.getlocks = function (callback) {
   var self = this;
 
-  require('request').get({
+  // get locks
+  this.platformLog("getting locks ...");
+  var getLocks = this.augustApi.getLocks();
+  getLocks.then(function (result) {
+    var json = JSON.parse(JSON.stringify(result));
+    self.lockids = Object.keys(json);
+    for (var i = 0; i < self.lockids.length; i++) {
+      self.lock = json[self.lockids[i]];
+      self.lockname = self.lock["HouseName"];
+      self.platformLog("House Name " + " " + self.lockname);
+      self.lockId = self.lockids[i];
+      self.platformLog("LockId " + " " + self.lockId);
 
-    url: "https://api-production.august.com/users/locks/mine",
-    headers: { 
-      'content-type': this.ContentType, 
-      'x-kease-api-key': this.xkeaseapikey, 
-      'x-august-access-token': this.securityToken 
-    },
+      var getLock = self.augustApi.getLock(self.lockId);
+      getLock.then(function (lock) {
+        var lockJson = JSON.stringify(lock);
+        self.getDevice(callback, lockJson);
 
-  }, function (error, request, body) {
-    if (!error && request.statusCode == 200) {
-      var json = JSON.parse(body);
-      self.lockids = Object.keys(json);
-      for (var i = 0; i < self.lockids.length; i++) {
-        self.lock = json[self.lockids[i]];
-        self.lockname = self.lock["HouseName"];
-        self.platformLog("House Name " + " " + self.lockname);
-        self.getDevice(callback);
+      }, function (error) {
+        self.platformLog(error);
+        callback(error, null);
 
-      }
+      });
 
     }
-  }).on('error', function (error) {
+
+  }, function (error) {
     self.platformLog(error);
     callback(error, null);
 
@@ -370,192 +333,158 @@ AugustPlatform.prototype.getlocks = function (callback) {
 
 }
 
-AugustPlatform.prototype.getDevice = function (callback, state) {
+AugustPlatform.prototype.getDevice = function (callback, lockJson, state) {
   var self = this;
+  var locks = JSON.parse(lockJson);
+
   this.validData = false;
 
-  // Reset validData hint until we retrived data from the server
+  var thisDeviceID = locks.LockID.toString();
+  var thisSerialNumber = locks.SerialNumber.toString();
+  var thisModel = locks.skuNumber.toString();
+  var thislockName = locks.LockName;
+  var state = locks.LockStatus.status;
+  var nameFound = true;
+  var stateFound = true;
+  var thishome = locks.HouseName;
+  self.batt = locks.battery * 100;
 
-  // Querystring params
-  require('request').get({
-    uri: "https://api-production.august.com/locks/" + self.lockids,
-    headers: { 
-      'content-type': this.ContentType, 
-      'x-kease-api-key': this.xkeaseapikey, 
-      'x-august-access-token': this.securityToken 
-    },
+  var locked = state == "locked";
+  var unlocked = state == "unlocked";
 
-  }, function (error, request, body) {
-    if (!error && request.statusCode == 200) {
-      var locks = JSON.parse(body);
+  var thislockState = (state == "locked") ? "1" : "0";
 
-      var thisDeviceID = locks.LockID.toString();
-      var thisSerialNumber = locks.SerialNumber.toString();
-      var thisModel = locks.Bridge.deviceModel.toString();
-      var thislockName = locks.LockName;
-      var state = locks.LockStatus.status;
-      var nameFound = true;
-      var stateFound = true;
-      var thishome = locks.HouseName;
-      self.batt = locks.battery * 100;
+  if (self.batt < 20) {
+    lowbatt = Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW;
+    var newbatt = Characteristic.LockCurrentState.SECURED;
 
-      var locked = state == "locked";
-      var unlocked = state == "unlocked";
+  } else if (self.batt > 20) {
+    lowbatt = Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL;
+    var newbatt = Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL;
 
-      var thislockState = (state == "locked") ? "1" : "0";
+  }
 
-      if (self.batt < 20) {
-        lowbatt = Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW;
-        var newbatt = Characteristic.LockCurrentState.SECURED;
+  if (locks.Bridge) {
 
-      } else if (self.batt > 20) {
-        lowbatt = Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL;
-        var newbatt = Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL;
+    // Initialization for opener
+    if (!self.accessories[thisDeviceID]) {
+      var uuid = UUIDGen.generate(thisDeviceID);
 
-      }
+      // Setup accessory as GARAGE_lock_OPENER (4) category.
+      var newAccessory = new Accessory("August " + thishome, uuid, 6);
 
-      // Initialization for opener
-      if (!self.accessories[thisDeviceID]) {
-        var uuid = UUIDGen.generate(thisDeviceID);
+      // New accessory found in the server is always reachable
+      newAccessory.reachable = true;
 
-        // Setup accessory as GARAGE_lock_OPENER (4) category.
-        var newAccessory = new Accessory("August " + thishome, uuid, 6);
+      // Store and initialize variables into context
+      newAccessory.context.deviceID = thisDeviceID;
+      newAccessory.context.initialState = Characteristic.LockCurrentState.SECURED;
+      newAccessory.context.currentState = Characteristic.LockCurrentState.SECURED;
+      newAccessory.context.serialNumber = thisSerialNumber;
+      newAccessory.context.home = thishome;
+      newAccessory.context.model = thisModel;
+      newAccessory.context.batt = self.batt;
+      newAccessory.context.low = self.low;
 
-        // New accessory found in the server is always reachable
-        newAccessory.reachable = true;
+      newAccessory.context.log = function (msg) { self.log(chalk.cyan("[" + newAccessory.displayName + "]"), msg); };
 
-        // Store and initialize variables into context
-        newAccessory.context.deviceID = thisDeviceID;
-        newAccessory.context.initialState = Characteristic.LockCurrentState.SECURED;
-        newAccessory.context.currentState = Characteristic.LockCurrentState.SECURED;
-        newAccessory.context.serialNumber = thisSerialNumber;
-        newAccessory.context.home = thishome;
-        newAccessory.context.model = thisModel;
-        newAccessory.context.batt = self.batt;
-        newAccessory.context.low = self.low;
-
-        newAccessory.context.log = function (msg) { self.log(chalk.cyan("[" + newAccessory.displayName + "]"), msg); };
-
-        // Setup HomeKit security systemLoc service
-        newAccessory.addService(Service.LockMechanism, thislockName);
-        newAccessory.addService(Service.BatteryService);
-        // Setup HomeKit accessory information
-        self.setAccessoryInfo(newAccessory);
-        // Setup listeners for different security system events
-        self.setService(newAccessory);
-        // Register accessory in HomeKit
-        self.api.registerPlatformAccessories("homebridge-AugustLock2", "AugustLock2", [newAccessory]);
-
-      } else {
-        // Retrieve accessory from cache
-        var newAccessory = self.accessories[thisDeviceID];
-
-        // Update context
-        newAccessory.context.deviceID = thisDeviceID;
-        newAccessory.context.serialNumber = thisSerialNumber;
-        newAccessory.context.model = thisModel;
-        newAccessory.context.home = thishome;
-
-
-        // Accessory is reachable after it's found in the server
-        newAccessory.updateReachability(true);
-
-      }
-
-      if (self.batt) {
-        newAccessory.context.low = (self.batt > 20) ? Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL : Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW;
-
-      }
-
-      if (state === "locked") {
-        newAccessory.context.initialState = Characteristic.LockCurrentState.UNSECURED;
-        var newState = Characteristic.LockCurrentState.SECURED;
-
-      } else if (state === "unlocked") {
-        newAccessory.context.initialState = Characteristic.LockCurrentState.UNSECURED;
-        var newState = Characteristic.LockCurrentState.UNSECURED;
-
-      }
-
-      // Detect for state changes
-      if (newState !== newAccessory.context.currentState) {
-        self.count = 0;
-        newAccessory.context.currentState = newState;
-
-      }
-
-      // Store accessory in cache
-      self.accessories[thisDeviceID] = newAccessory;
-
-      // Set validData hint after we found an opener
-      self.validData = true;
-
-    }
-
-    // Did we have valid data?
-    if (self.validData) {
-      // Set short polling interval when state changes
-      if (self.tout && self.count == 0) {
-        clearTimeout(self.tout);
-        self.periodicUpdate();
-
-      }
-
-      callback();
+      // Setup HomeKit security systemLoc service
+      newAccessory.addService(Service.LockMechanism, thislockName);
+      newAccessory.addService(Service.BatteryService);
+      // Setup HomeKit accessory information
+      self.setAccessoryInfo(newAccessory);
+      // Setup listeners for different security system events
+      self.setService(newAccessory);
+      // Register accessory in HomeKit
+      self.api.registerPlatformAccessories("homebridge-AugustLock2", "AugustLock2", [newAccessory]);
 
     } else {
-      self.platformLog("Error: Couldn't find a August lock device.");
-      callback("Missing August Device ID");
+      // Retrieve accessory from cache
+      var newAccessory = self.accessories[thisDeviceID];
+
+      // Update context
+      newAccessory.context.deviceID = thisDeviceID;
+      newAccessory.context.serialNumber = thisSerialNumber;
+      newAccessory.context.model = thisModel;
+      newAccessory.context.home = thishome;
+
+
+      // Accessory is reachable after it's found in the server
+      newAccessory.updateReachability(true);
 
     }
 
-  }).on('error', function (error) {
-    self.platformLog("Error '" + error + "'" + "lock null");
+    if (self.batt) {
+      newAccessory.context.low = (self.batt > 20) ? Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL : Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW;
 
-  });
+    }
+
+    if (state === "locked") {
+      newAccessory.context.initialState = Characteristic.LockCurrentState.UNSECURED;
+      var newState = Characteristic.LockCurrentState.SECURED;
+
+    } else if (state === "unlocked") {
+      newAccessory.context.initialState = Characteristic.LockCurrentState.UNSECURED;
+      var newState = Characteristic.LockCurrentState.UNSECURED;
+
+    }
+
+    // Detect for state changes
+    if (newState !== newAccessory.context.currentState) {
+      self.count = 0;
+      newAccessory.context.currentState = newState;
+
+    }
+
+    // Store accessory in cache
+    self.accessories[thisDeviceID] = newAccessory;
+
+  }
+
+  // Set validData hint after we found an opener
+  self.validData = true;
+
+  // Did we have valid data?
+  if (self.validData) {
+    // Set short polling interval when state changes
+    if (self.tout && self.count == 0) {
+      clearTimeout(self.tout);
+      self.periodicUpdate();
+
+    }
+    callback();
+
+  } else {
+    self.platformLog("Error: Couldn't find a August lock device.");
+    callback("Missing August Device ID");
+
+  }
 
 }
 
 // Send opener target state to the server
 AugustPlatform.prototype.setState = function (accessory, state, callback) {
   var self = this;
-  var thisOpener = accessory.context;
-  var name = accessory.displayName;
+  var lockCtx = accessory.context;
+  var status = this.lockState[state];
   var augustState = (state == Characteristic.LockTargetState.SECURED) ? "lock" : "unlock";
-  console.log(augustState);
-  var status = self.lockState[state];
-  request.put({
-    url: "https://api-production.august.com/remoteoperate/" + thisOpener.deviceID + "/" + augustState,
-    "headers": {
-      "Content-Type": this.ContentType,
-      'x-kease-api-key': this.xkeaseapikey,
-      'x-august-access-token': this.securityToken,
-      'Proxy-Connection': 'keep-alive',
-      'accept-Language': 'en-US;q=1'
-    }
 
-  }, function (error, response, json) {
-    if (!error && response.statusCode == 200) {
-      thisOpener.log("State was successfully set to " + status);
+  var remoteOperate = this.augustApi.remoteOperate(lockCtx.deviceID, augustState);
+  remoteOperate.then(function (result) {
+    lockCtx.log("State was successfully set to " + status);
 
-      // Set short polling interval
-      self.count = 0;
-      if (self.tout) {
-        clearTimeout(self.tout);
-        self.periodicUpdate();
-      }
-
-      callback(error, state);
-
-    } else {
-      thisOpener.log("Error '" + error + "' setting lock state: " + json);
-      self.removeAccessory(accessory);
-      callback(error);
+    // Set short polling interval
+    self.count = 0;
+    if (self.tout) {
+      clearTimeout(self.tout);
+      self.periodicUpdate();
 
     }
+    callback(null, state);
 
-  }).on('error', function (error) {
-    thisOpener.log(error);
+  }, function (error) {
+    lockCtx.log("Error '" + error + "' setting lock state: " + status);
+    self.removeAccessory(accessory);
     callback(error);
 
   });
@@ -564,59 +493,63 @@ AugustPlatform.prototype.setState = function (accessory, state, callback) {
 
 AugustPlatform.prototype.sendcode = function (callback) {
   var self = this;
-  var body = {
-    'code': this.code,
-    'phone': '+' + this.phone
-  };
 
-  require('request').post({
-    url: "https://api-production.august.com/validate/phone",
-    headers: {
-      'content-type': this.ContentType, 
-      'x-kease-api-key': this.xkeaseapikey, 
-      'x-august-access-token': this.securityToken },
+  this.platformLog("sending code to " + this.phone);
+  var sendCodeToPhone = this.augustApi.sendCodeToPhone('+' + this.phone);
+  sendCodeToPhone.then(function (result) {
+    self.platformLog("sent code to " + self.phone);
 
-    body: JSON.stringify(body)
-
-  }, function (error, request, body) {
-    if (!error && request.statusCode == 200) {
-      self.platformLog("send code " + self.code);
-      self.sendcodeemail(callback);
-    }
-
-  }).on('error', function (error) {
+  }, function (error) {
     self.platformLog(error);
     callback(error, null);
 
   });
-}
 
+}
+AugustPlatform.prototype.validatecode = function (callback) {
+  var self = this;
+
+  this.platformLog("validate code " + this.code);
+  var validatePhone = this.augustApi.validatePhone('+' + this.phone, this.code);
+  validatePhone.then(function (result) {
+    self.securityToken = result.response.headers['x-august-access-token'];
+
+  }, function (error) {
+    self.platformLog(error);
+    callback(error, null);
+
+  });
+
+}
 AugustPlatform.prototype.sendcodeemail = function (callback) {
   var self = this;
-  var body = {
-    'value': '+' + this.email
-  };
 
-  require('request').post({
-    url: "https://api-production.august.com/validate/email",
-    headers: {
-      'content-type': this.ContentType, 
-      'x-kease-api-key': this.xkeaseapikey, 
-      'x-august-access-token': this.securityToken },
+  this.platformLog("sending code to " + this.email);
+  var sendCodeToEmail = this.augustApi.sendCodeToEmail(this.email);
+  sendCodeToEmail.then(function (result) {
+    self.platformLog("sent code to " + self.email);
 
-    body: JSON.stringify(body)
-    
-  }, function (error, request, body) {
-    if (!error && request.statusCode == 200) {
-      self.platformLog("send code email " + self.code);
-      self.getlocks(callback);
-    }
-
-  }).on('error', function (error) {
+  }, function (error) {
     self.platformLog(error);
     callback(error, null);
 
   });
+
+}
+AugustPlatform.prototype.validatecodeemail = function (callback) {
+  var self = this;
+
+  this.platformLog("validate code " + this.code);
+  var validateEmail = this.augustApi.validateEmail(this.email, this.code);
+  validateEmail.then(function (result) {
+    self.securityToken = result.response.headers['x-august-access-token'];
+
+  }, function (error) {
+    self.platformLog(error);
+    callback(error, null);
+
+  });
+
 }
 
 // Method to handle plugin configuration in Hesperus app
@@ -648,6 +581,10 @@ AugustPlatform.prototype.configurationRequestHandler = function (context, reques
           "interface": "input",
           "title": "Configuration",
           "items": [{
+            "id": "email",
+            "title": "Email Address (Required)",
+            "placeholder": this.email ? "Leave blank if unchanged" : "email"
+          }, {
             "id": "phone",
             "title": "Phone (Required)",
             "placeholder": this.phone ? "Leave blank if unchanged" : "phone - Example (1xxxxxxxxxx)"
@@ -656,14 +593,8 @@ AugustPlatform.prototype.configurationRequestHandler = function (context, reques
             "title": "Password (Required)",
             "placeholder": this.password ? "Leave blank if unchanged" : "password",
             "secure": true
-          }, {
-            "id": "email",
-            "title": "Email Address (Required)",
-            "placeholder": this.email ? "Leave blank if unchanged" : "email",
-            "secure": true
           }]
         }
-
         context.step = 2;
         callback(respDict);
         break;
@@ -672,24 +603,12 @@ AugustPlatform.prototype.configurationRequestHandler = function (context, reques
         var userInputs = request.response.inputs;
 
         // Setup info for adding or updating accessory
-        this.email = this.email || userInputs.email ;
-        this.phone = this.phone || userInputs.phone ;
-        this.password = this.password || userInputs.password;
+        this.email = userInputs.email || this.email;
+        this.phone = userInputs.phone || this.phone;
+        this.password = userInputs.password || this.password;
 
-        // Check for required info
         if (this.email && this.phone && this.password) {
-          // Add or update accessory in HomeKit
-          this.addAccessory();
-
-          // Reset polling
-          this.maxCount = this.shortPollDuration / this.shortPoll;
-          this.count = this.maxCount;
-
-          if (this.tout) {
-            clearTimeout(this.tout);
-            this.periodicUpdate();
-
-          }
+          this.sendcode(callback);
 
           var respDict = {
             "type": "Interface",
@@ -698,7 +617,7 @@ AugustPlatform.prototype.configurationRequestHandler = function (context, reques
             "items": [{
               "id": "code",
               "title": "August Verification Code",
-              "placeholder": this.code ? "Email Verification Code" : "code",
+              "placeholder": this.code ? "Verification Code" : "code",
               "showNextButton": true
             }]
           };
@@ -713,8 +632,8 @@ AugustPlatform.prototype.configurationRequestHandler = function (context, reques
             "detail": "Some required information is missing.",
             "showNextButton": true
           };
-
           context.step = 1;
+
         }
         callback(respDict);
         break;
@@ -723,7 +642,45 @@ AugustPlatform.prototype.configurationRequestHandler = function (context, reques
         var userInputs = request.response.inputs;
 
         // Setup info for adding or updating accessory
-        this.sendcode(callback);
+        this.code = userInputs.code || this.code;
+        this.validatecode(callback);
+
+        if (this.email && this.phone && this.password) {
+          this.sendcodeemail(callback);
+
+          var respDict = {
+            "type": "Interface",
+            "interface": "input",
+            "title": "code",
+            "items": [{
+              "id": "code",
+              "title": "August Verification Code",
+              "placeholder": this.code ? "Verification Code" : "code",
+              "showNextButton": true
+            }]
+          };
+          context.step = 4;
+
+        } else {
+          // Error if required info is missing
+          var respDict = {
+            "type": "Interface",
+            "interface": "instruction",
+            "title": "Error",
+            "detail": "Some required information is missing.",
+            "showNextButton": true
+          };
+          context.step = 1;
+        }
+        callback(respDict);
+        break;
+
+      case 4:
+        var userInputs = request.response.inputs;
+
+        // Setup info for adding or updating accessory
+        this.code = userInputs.code || this.code;
+        this.validatecodeemail(callback);
 
         var respDict = {
           "type": "Interface",
@@ -732,11 +689,24 @@ AugustPlatform.prototype.configurationRequestHandler = function (context, reques
           "detail": "The configuration is now updated.",
           "showNextButton": true
         };
-        context.step = 4;
+        context.step = 5;
         callback(respDict);
         break;
 
-      case 4:
+      case 5:
+        // Add or update accessory in HomeKit
+        this.addAccessory();
+
+        // Reset polling
+        this.maxCount = this.shortPollDuration / this.shortPoll;
+        this.count = this.maxCount;
+
+        if (this.tout) {
+          clearTimeout(this.tout);
+          this.periodicUpdate();
+
+        }
+
         // Update config.json accordingly
         delete context.step;
         var newConfig = this.config;
