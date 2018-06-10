@@ -174,7 +174,7 @@ AugustPlatform.prototype.setState = function (accessory, state, callback) {
 
     }
 
-  });
+  }, accessory.context.deviceID);
 
 }
 
@@ -248,9 +248,9 @@ AugustPlatform.prototype.updatelockStates = function (accessory) {
 
 // Method to retrieve lock state from the server
 AugustPlatform.prototype.updateState = function (callback) {
-  if (this.validData) {
+  if (!this.validData) {
     // Refresh data directly from sever if current data is valid
-    this.getDevice(callback);
+    this.getlocks(callback);
 
   } else {
     // Re-login if current data is not valid
@@ -311,17 +311,7 @@ AugustPlatform.prototype.getlocks = function (callback) {
       self.platformLog("House Name " + " " + self.lockname);
       self.lockId = self.lockids[i];
       self.platformLog("LockId " + " " + self.lockId);
-
-      var getLock = self.augustApi.getLock(self.lockId);
-      getLock.then(function (lock) {
-        var lockJson = JSON.stringify(lock);
-        self.getDevice(callback, lockJson);
-
-      }, function (error) {
-        self.platformLog(error);
-        callback(error, null);
-
-      });
+      self.getDevice(callback, self.lockId);
 
     }
 
@@ -333,38 +323,44 @@ AugustPlatform.prototype.getlocks = function (callback) {
 
 }
 
-AugustPlatform.prototype.getDevice = function (callback, lockJson, state) {
+AugustPlatform.prototype.getDevice = function (callback, lockId, state) {
   var self = this;
-  var locks = JSON.parse(lockJson);
 
   this.validData = false;
 
-  var thisDeviceID = locks.LockID.toString();
-  var thisSerialNumber = locks.SerialNumber.toString();
-  var thisModel = locks.skuNumber.toString();
-  var thislockName = locks.LockName;
-  var state = locks.LockStatus.status;
-  var nameFound = true;
-  var stateFound = true;
-  var thishome = locks.HouseName;
-  self.batt = locks.battery * 100;
+  var getLock = self.augustApi.getLock(lockId);
+  getLock.then(function (lock) {
+    var locks = JSON.parse(JSON.stringify(lock));
 
-  var locked = state == "locked";
-  var unlocked = state == "unlocked";
+    if(!locks.Bridge) {
+      self.validData = true;
+      return;
 
-  var thislockState = (state == "locked") ? "1" : "0";
+    }
+    var thisDeviceID = locks.LockID.toString();
+    var thisSerialNumber = locks.SerialNumber.toString();
+    var thisModel = locks.skuNumber.toString();
+    var thislockName = locks.LockName;
+    var state = locks.LockStatus.status;
+    var nameFound = true;
+    var stateFound = true;
+    var thishome = locks.HouseName;
+    self.batt = locks.battery * 100;
 
-  if (self.batt < 20) {
-    lowbatt = Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW;
-    var newbatt = Characteristic.LockCurrentState.SECURED;
+    var locked = state == "locked";
+    var unlocked = state == "unlocked";
 
-  } else if (self.batt > 20) {
-    lowbatt = Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL;
-    var newbatt = Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL;
+    var thislockState = (state == "locked") ? "1" : "0";
 
-  }
+    if (self.batt < 20) {
+      lowbatt = Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW;
+      var newbatt = Characteristic.LockCurrentState.SECURED;
 
-  if (locks.Bridge) {
+    } else if (self.batt > 20) {
+      lowbatt = Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL;
+      var newbatt = Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL;
+
+    }
 
     // Initialization for opener
     if (!self.accessories[thisDeviceID]) {
@@ -439,26 +435,30 @@ AugustPlatform.prototype.getDevice = function (callback, lockJson, state) {
     // Store accessory in cache
     self.accessories[thisDeviceID] = newAccessory;
 
-  }
+    // Set validData hint after we found an opener
+    self.validData = true;
 
-  // Set validData hint after we found an opener
-  self.validData = true;
+    // Did we have valid data?
+    if (self.validData) {
+      // Set short polling interval when state changes
+      if (self.tout && self.count == 0) {
+        clearTimeout(self.tout);
+        self.periodicUpdate();
 
-  // Did we have valid data?
-  if (self.validData) {
-    // Set short polling interval when state changes
-    if (self.tout && self.count == 0) {
-      clearTimeout(self.tout);
-      self.periodicUpdate();
+      }
+      callback();
+
+    } else {
+      self.platformLog("Error: Couldn't find a August lock device.");
+      callback("Missing August Device ID");
 
     }
-    callback();
 
-  } else {
-    self.platformLog("Error: Couldn't find a August lock device.");
-    callback("Missing August Device ID");
+  }, function (error) {
+    self.platformLog(error);
+    callback(error, null);
 
-  }
+  });
 
 }
 
