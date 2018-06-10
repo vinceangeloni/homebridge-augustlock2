@@ -248,7 +248,7 @@ AugustPlatform.prototype.updatelockStates = function (accessory) {
 
 // Method to retrieve lock state from the server
 AugustPlatform.prototype.updateState = function (callback) {
-  if (!this.validData) {
+  if (this.validData) {
     // Refresh data directly from sever if current data is valid
     this.getlocks(callback);
 
