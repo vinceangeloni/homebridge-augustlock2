@@ -332,7 +332,7 @@ AugustPlatform.prototype.getDevice = function (callback, lockId, state) {
   getLock.then(function (lock) {
     var locks = JSON.parse(JSON.stringify(lock));
 
-    if(!locks.Bridge) {
+    if (!locks.Bridge) {
       self.validData = true;
       return;
 
@@ -404,7 +404,6 @@ AugustPlatform.prototype.getDevice = function (callback, lockId, state) {
       newAccessory.context.model = thisModel;
       newAccessory.context.home = thishome;
 
-
       // Accessory is reachable after it's found in the server
       newAccessory.updateReachability(true);
 
@@ -415,20 +414,23 @@ AugustPlatform.prototype.getDevice = function (callback, lockId, state) {
 
     }
 
-    if (state === "locked") {
-      newAccessory.context.initialState = Characteristic.LockCurrentState.UNSECURED;
-      var newState = Characteristic.LockCurrentState.SECURED;
+    if (state) {
+      if (state === "locked") {
+        newAccessory.context.initialState = Characteristic.LockCurrentState.UNSECURED;
+        var newState = Characteristic.LockCurrentState.SECURED;
 
-    } else if (state === "unlocked") {
-      newAccessory.context.initialState = Characteristic.LockCurrentState.UNSECURED;
-      var newState = Characteristic.LockCurrentState.UNSECURED;
+      } else if (state === "unlocked") {
+        newAccessory.context.initialState = Characteristic.LockCurrentState.SECURED;
+        var newState = Characteristic.LockCurrentState.UNSECURED;
 
-    }
+      }
 
-    // Detect for state changes
-    if (newState !== newAccessory.context.currentState) {
-      self.count = 0;
-      newAccessory.context.currentState = newState;
+      // Detect for state changes
+      if (newState !== newAccessory.context.currentState) {
+        self.count = 0;
+        newAccessory.context.currentState = newState;
+
+      }
 
     }
 
