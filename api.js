@@ -7,8 +7,9 @@ var AugustApi = function AugustApi(securityToken) {
             url: 'https://api-production.august.com/',
             headers: {
                 'x-august-access-token': securityToken,
+                'x-august-api-key': '727dba56-fe45-498d-b4aa-293f96aae0e5',
                 'x-kease-api-key': '14445b6a2dba',
-                'content-type': 'application/json'
+                'Content-Type': 'application/json'
             },
             json: true
         });
