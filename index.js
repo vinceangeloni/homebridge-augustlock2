@@ -21,10 +21,11 @@ function AugustPlatform(log, config, api) {
   this.phone = this.config.phone;
   this.password = this.config.password;
   this.securityToken = this.config.securityToken;
-  this.longPoll = parseInt(this.config.longPoll, 10) || 300;
-  this.shortPoll = parseInt(this.config.shortPoll, 10) || 5;
-  this.shortPollDuration = parseInt(this.config.shortPollDuration, 10) || 120;
+  this.longPoll = parseInt(this.config.longPoll, 10) || 180;
+  this.shortPoll = parseInt(this.config.shortPoll, 10) || 15;
+  this.shortPollDuration = parseInt(this.config.shortPollDuration, 10) || 300;
   this.tout = null;
+  this.updating = false;
   this.maxCount = this.shortPollDuration / this.shortPoll;
   this.count = this.maxCount;
   this.validData = false;
@@ -202,13 +203,15 @@ AugustPlatform.prototype.periodicUpdate = function () {
   // Setup periodic update with polling interval
   this.tout = setTimeout(function () {
     self.tout = null
-    self.updateState(function (error) {
+    self.updateState(function (error, skipped) {
       if (!error) {
-        // Update states for all HomeKit accessories
-        for (var deviceID in self.accessories) {
-          var accessory = self.accessories[deviceID];
-          self.updatelockStates(accessory);
+        if (!skipped) {
+          // Update states for all HomeKit accessories
+          for (var deviceID in self.accessories) {
+            var accessory = self.accessories[deviceID];
+            self.updatelockStates(accessory);
 
+          }
         }
 
       } else {
@@ -218,8 +221,11 @@ AugustPlatform.prototype.periodicUpdate = function () {
       }
 
       // Setup next polling
-      self.periodicUpdate();
+      if (!skipped) {
+        self.updating = false;
+        self.periodicUpdate();
 
+      }
     });
 
   }, refresh * 1000);
@@ -248,13 +254,29 @@ AugustPlatform.prototype.updatelockStates = function (accessory) {
 
 // Method to retrieve lock state from the server
 AugustPlatform.prototype.updateState = function (callback) {
+  if (this.updating) {
+    this.log("updateState called while previous still active");
+    callback(null, true);
+    return;
+
+  }
+
+  this.log.debug("updateState called");
+  this.updating = true;
+
   if (this.validData) {
     // Refresh data directly from sever if current data is valid
-    this.getlocks(callback);
+    this.getlocks(function (error) {
+      callback(error, false);
+
+    });
 
   } else {
     // Re-login if current data is not valid
-    this.login(callback);
+    this.login(function (error) {
+      callback(error, false);
+
+    });
 
   }
 
