@@ -15,7 +15,7 @@ var AugustApi = function AugustApi(securityToken) {
         });
     }
 
-    var makeRequest = async function makeRequest(option) {
+    var makeRequest = function makeRequest(option) {
         return (await makeRawRequest(option)).body;
     }
 
